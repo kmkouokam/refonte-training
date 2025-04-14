@@ -232,6 +232,11 @@ resource "aws_db_instance" "mysql_db" {
   ]
   port = 3306
 
+  # Enable automated backups
+  backup_retention_period = 7  # Keep backups for 7 days
+  monitoring_interval     = 60 # seconds
+  monitoring_role_arn     = aws_iam_role.rds_monitoring_role.arn
+
 
   tags = {
     Name = "mysql_db-${count.index + 1}"
@@ -239,6 +244,49 @@ resource "aws_db_instance" "mysql_db" {
   depends_on = [aws_db_subnet_group.db_sub_group, aws_security_group.backend]
 
 }
+
+# Enable Enhanced Monitoring
+resource "aws_iam_role" "rds_monitoring_role" {
+  name = "rds-monitoring-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = {
+        Service = "monitoring.rds.amazonaws.com"
+      },
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring_attach" {
+  role       = aws_iam_role.rds_monitoring_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
+#Create CloudWatch Alarms
+resource "aws_cloudwatch_metric_alarm" "rds_high_cpu" {
+  count      = length(var.private_subnet_cidrs)
+  alarm_name = "HighCPUUtilization-RDS${count.index + 1}"
+
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.mysql_db[count.index].id
+  }
+
+  alarm_description  = "This alarm triggers if RDS CPU usage exceeds 80% for 10 minutes."
+  treat_missing_data = "missing"
+}
+
 
 
 data "aws_iam_policy_document" "assume_role" {
@@ -323,6 +371,11 @@ resource "aws_iam_role_policy" "vpc_access" {
           "logs:DescribeLogGroups",
           "logs:StartLiveTail",
           "logs:StopLiveTail",
+          "logs:CreateLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams",
+          "logs:CreateLogStream",
 
 
         ],
@@ -340,31 +393,8 @@ resource "aws_iam_role_policy" "vpc_access" {
 }
 
 
-/*
-resource "aws_iam_role" "ec2_role" {
-  name               = "vpro-aws-elasticbeanstalk-ec2-role"
-  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
-  managed_policy_arns = [
-    "arn:aws:iam::aws:policy/CloudWatchFullAccess",
-    "arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier",
-    "arn:aws:iam::aws:policy/AdministratorAccess-AWSElasticBeanstalk",
-    "arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkRoleSNS",
-    "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-
-  ]
 
 
-}
-
-
-
-resource "aws_iam_instance_profile" "instance_profile" {
-
-  name = "vpro-aws-elasticbeanstalk-ec2-role"
-  role = aws_iam_role.ec2_role.name
-}
-
-*/
 
 resource "aws_security_group" "lambda_sg" {
   name        = "lambda_sg"
